@@ -1,0 +1,8 @@
+module obsidian-web-scraper
+
+go 1.18
+
+require (
+    github.com/PuerkitoBio/goquery v1.8.0
+    github.com/spf13/viper v1.10.0
+)

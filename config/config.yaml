@@ -1,0 +1,20 @@
+# Web Scraper Configuration
+
+# The URL to scrape
+target_url: "https://example.com"
+
+# Output directory for markdown files
+output_dir: "~/Documents/Obsidian/MyVault"
+
+# Rate limiting settings
+min_delay: 1000  # Minimum delay between requests in milliseconds
+max_delay: 3000  # Maximum delay between requests in milliseconds
+max_retries: 3   # Maximum number of retry attempts 
+
+# Optional: CSS selector for targeting specific content
+# Leave empty to use default content extraction
+content_selector: ""
+
+# Recursive scraping settings
+recursion_depth: 1   # How many levels of links to follow (0=none)
+max_pages: 10        # Maximum number of pages to scrape
