@@ -138,19 +138,41 @@ func scrapePage(targetURL string, cfg *config.Config, fileManager *storage.FileM
     
     fmt.Printf("Successfully fetched HTML from %s\n", targetURL)
     
-    // Parse the content
+    // Parse the content with more logging
+    fmt.Println("Parsing content from HTML document...")
     content, err := scraper.Parse(doc, cfg.ContentSelector)
     if err != nil {
         return "", fmt.Errorf("failed to parse content: %v", err)
     }
     
-    if content.Title == "" {
-        content.Title = "Untitled Document"
-        fmt.Println("Warning: No title found, using 'Untitled Document'")
-    }
+    fmt.Printf("Title: %s\n", content.Title)
+    fmt.Printf("Content length: %d characters\n", len(content.Content))
     
-    fmt.Printf("Successfully parsed content: %d characters, title: %s\n", 
-               len(content.Content), content.Title)
+    // If content is too short, try again with plain selectors
+    if len(content.Content) < 1000 && cfg.ContentSelector == "" {
+        fmt.Println("Content seems short, trying common article selectors...")
+        
+        // Try common selectors
+        commonSelectors := []string{
+            "article", ".article", ".post", ".content", 
+            "main", "#content", ".article-content", ".post-content",
+            ".entry-content", "[itemprop='articleBody']",
+        }
+        
+        for _, selector := range commonSelectors {
+            fmt.Printf("Trying selector: %s\n", selector)
+            selectedContent := doc.Find(selector)
+            if selectedContent.Length() > 0 {
+                html, _ := selectedContent.Html()
+                if len(html) > 1000 {
+                    content.Content = html
+                    fmt.Printf("Found better content with selector %s (%d characters)\n", 
+                               selector, len(content.Content))
+                    break
+                }
+            }
+        }
+    }
     
     // Create base URL from target URL (for resolving relative links)
     baseURL := targetURL
@@ -166,15 +188,11 @@ func scrapePage(targetURL string, cfg *config.Config, fileManager *storage.FileM
         return "", fmt.Errorf("failed to convert content to markdown: %v", err)
     }
     
-    fmt.Printf("Successfully converted to markdown: %d characters\n", len(md))
-    
     // Save to file
     filePath, err := fileManager.SaveMarkdown(md, content.Title, folder)
     if err != nil {
         return "", fmt.Errorf("failed to save markdown file: %v", err)
     }
-    
-    fmt.Printf("File saved to: %s\n", filePath)
     
     // Register this page in the link manager
     linkManager.RegisterFile(targetURL, filePath)
