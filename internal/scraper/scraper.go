@@ -2,7 +2,6 @@ package scraper
 
 import (
     "fmt"
-    "io"
     "math/rand"
     "net/http"
     "time"
@@ -58,6 +57,8 @@ func (s *Scraper) Fetch() (*goquery.Document, error) {
     // Initialize random number generator
     rand.Seed(time.Now().UnixNano())
 
+    fmt.Printf("Fetching URL: %s\n", s.URL)
+
     // Implement exponential backoff for retries
     for attempt := 0; attempt <= s.MaxRetries; attempt++ {
         // Random delay between requests to avoid detection
@@ -82,7 +83,9 @@ func (s *Scraper) Fetch() (*goquery.Document, error) {
         }
 
         // Set random User-Agent to avoid detection
-        req.Header.Set("User-Agent", getRandomUserAgent())
+        userAgent := getRandomUserAgent()
+        req.Header.Set("User-Agent", userAgent)
+        fmt.Printf("Using User-Agent: %s\n", userAgent)
         
         // Add common headers to appear more like a normal browser
         req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
@@ -92,7 +95,14 @@ func (s *Scraper) Fetch() (*goquery.Document, error) {
 
         // Make the request
         resp, err = s.client.Do(req)
-        if err == nil && resp.StatusCode == http.StatusOK {
+        if err != nil {
+            fmt.Printf("Request error: %v (attempt %d/%d)\n", err, attempt+1, s.MaxRetries+1)
+            continue
+        }
+        
+        fmt.Printf("HTTP Status: %d\n", resp.StatusCode)
+        
+        if resp.StatusCode == http.StatusOK {
             break
         }
 
@@ -114,6 +124,13 @@ func (s *Scraper) Fetch() (*goquery.Document, error) {
     defer resp.Body.Close()
     if err != nil {
         return nil, fmt.Errorf("error parsing HTML: %w", err)
+    }
+
+    // Check if we actually got HTML content
+    if doc.Find("html").Length() == 0 {
+        fmt.Println("Warning: Response doesn't appear to be HTML")
+    } else {
+        fmt.Println("HTML document successfully parsed")
     }
 
     return doc, nil

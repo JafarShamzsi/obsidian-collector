@@ -24,9 +24,9 @@ func NewLinkManager(baseURL string) *LinkManager {
     }
     
     return &LinkManager{
-        baseURL:   baseURL,
-        urlToFile: make(map[string]string),
-        scraped:   make(map[string]bool),
+        baseURL:     baseURL,
+        urlToFile:   make(map[string]string),
+        scraped:     make(map[string]bool),
         pendingURLs: []string{},
     }
 }
@@ -74,19 +74,18 @@ func (lm *LinkManager) GetObsidianLink(href, linkText string) (string, bool) {
     return "", false
 }
 
-// AddPendingURL adds a URL to the list of pending URLs that should be scraped
+// Add a URL to the pending list
 func (lm *LinkManager) addPendingURL(url string) {
     lm.mutex.Lock()
     defer lm.mutex.Unlock()
     
-    // Only add if not already scraped or pending
     if !lm.scraped[url] {
         lm.pendingURLs = append(lm.pendingURLs, url)
-        lm.scraped[url] = true // Mark as "known" to avoid duplicates
+        lm.scraped[url] = true
     }
 }
 
-// GetPendingURLs returns the list of URLs waiting to be scraped
+// GetPendingURLs returns the list of pending URLs
 func (lm *LinkManager) GetPendingURLs() []string {
     lm.mutex.RLock()
     defer lm.mutex.RUnlock()
@@ -96,7 +95,7 @@ func (lm *LinkManager) GetPendingURLs() []string {
     return result
 }
 
-// ClearPendingURLs clears the list of pending URLs
+// ClearPendingURLs clears all pending URLs
 func (lm *LinkManager) ClearPendingURLs() {
     lm.mutex.Lock()
     defer lm.mutex.Unlock()
@@ -104,41 +103,34 @@ func (lm *LinkManager) ClearPendingURLs() {
     lm.pendingURLs = []string{}
 }
 
-// IsInternalLink checks if a URL belongs to the same website
+// IsInternalLink checks if URL is internal to site
 func (lm *LinkManager) isInternalLink(href string) bool {
-    // Absolute URLs that start with the base URL
     if strings.HasPrefix(href, lm.baseURL) {
         return true
     }
     
-    // Relative URLs (starting with / or without protocol)
     if strings.HasPrefix(href, "/") || !strings.Contains(href, "://") {
         return true
     }
     
-    // Otherwise it's an external link
     return false
 }
 
 // NormalizeURL converts relative URLs to absolute
 func (lm *LinkManager) normalizeURL(href string) string {
-    // If already absolute, return as is
     if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
         return href
     }
     
-    // Handle relative URLs
     if strings.HasPrefix(href, "/") {
-        // Get base domain
         parsedURL, err := url.Parse(lm.baseURL)
         if err != nil {
-            return href // Return original if parsing fails
+            return href
         }
         
         baseWithScheme := parsedURL.Scheme + "://" + parsedURL.Host
         return baseWithScheme + href
     }
     
-    // Other relative URLs
     return lm.baseURL + href
 }

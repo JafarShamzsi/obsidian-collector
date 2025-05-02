@@ -7,21 +7,36 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/yourusername/yourproject/links"
+	"obsidian-collector/internal/links"
+	"obsidian-collector/internal/config"
 )
 
 // Converter converts HTML content to Markdown
 type Converter struct {
-	BaseURL     string
-	LinkManager *links.LinkManager
+	BaseURL       string
+	LinkManager   *links.LinkManager
+	CleaningOptions struct {
+		RemoveAds          bool
+		RemoveNavigation   bool
+		RemoveFooters      bool
+		ExtractMainContent bool
+	}
 }
 
 // NewConverter creates a new HTML to Markdown converter
-func NewConverter(baseURL string, linkManager *links.LinkManager) *Converter {
-	return &Converter{
-		BaseURL:     baseURL,
-		LinkManager: linkManager,
-	}
+func NewConverter(baseURL string, linkManager *links.LinkManager, config *config.Config) *Converter {
+    c := &Converter{
+        BaseURL:     baseURL,
+        LinkManager: linkManager,
+    }
+    
+    // Apply cleaning options from config
+    c.CleaningOptions.RemoveAds = config.RemoveAds
+    c.CleaningOptions.RemoveNavigation = config.RemoveNavigation
+    c.CleaningOptions.RemoveFooters = config.RemoveFooters
+    c.CleaningOptions.ExtractMainContent = config.ExtractMainContent
+    
+    return c
 }
 
 // HTMLToMarkdown converts HTML content to Markdown format
@@ -72,15 +87,121 @@ func (c *Converter) HTMLToMarkdown(title, html string, metadata map[string]strin
 
 // Clean up the HTML before processing
 func (c *Converter) cleanHTML(doc *goquery.Document) {
-	// Remove script and style elements
-	doc.Find("script, style, noscript, iframe, form").Remove()
+    // Remove script and style elements
+    doc.Find("script, style, noscript, iframe, form").Remove()
+    
+    // Remove common ad containers, sidebars, navbars, footers
+    adSelectors := []string{
+        "div[class*='ads']", "div[class*='advertisement']", "div[id*='ads']",
+        "div[class*='banner']", "div[id*='banner']", 
+        "aside", ".sidebar", "#sidebar", "[class*='sidebar']",
+        "footer", ".footer", "#footer", "[class*='footer']",
+        "nav", ".nav", "#nav", ".navigation", "#navigation",
+        "[class*='cookie']", "[id*='cookie']",
+        ".social", "#social", "[class*='social']",
+        "[class*='related']", "[id*='related']",
+        "[class*='share']", "[id*='share']",
+        "[class*='newsletter']", "[id*='newsletter']",
+        "[class*='popup']", "[id*='popup']",
+        "[class*='advert']", "[id*='advert']",
+        ".comments", "#comments", "[class*='comment-']",
+        "header", ".header", "#header",
+    }
+    
+    doc.Find(strings.Join(adSelectors, ", ")).Remove()
+    
+    // Remove comments
+    doc.Find("*").Contents().Each(func(i int, s *goquery.Selection) {
+        if s.Nodes != nil && len(s.Nodes) > 0 && s.Nodes[0].Type == 8 { // Comment node
+            s.Remove()
+        }
+    })
+    
+    // Try to identify and keep only the main content
+    c.extractMainContent(doc)
+}
 
-	// Remove comments
-	doc.Find("*").Contents().Each(func(i int, s *goquery.Selection) {
-		if s.Nodes != nil && len(s.Nodes) > 0 && s.Nodes[0].Type == 8 { // Comment node
-			s.Remove()
-		}
-	})
+// extractMainContent attempts to identify and keep only the main content of the page
+func (c *Converter) extractMainContent(doc *goquery.Document) {
+    // Common selectors for main content
+    mainContentSelectors := []string{
+        "article", "main", ".post-content", ".article-content", ".entry-content", 
+        "#content", ".content", ".post", ".article", ".entry", 
+        "[itemprop='articleBody']", ".story", ".story-body",
+    }
+    
+    // Try to find main content by common selectors
+    var mainContent *goquery.Selection
+    
+    // First pass: try to find exact main content container
+    for _, selector := range mainContentSelectors {
+        selection := doc.Find(selector)
+        if selection.Length() > 0 {
+            // Check if this has substantial content
+            if len(strings.TrimSpace(selection.Text())) > 200 {
+                mainContent = selection
+                break
+            }
+        }
+    }
+    
+    // If we found a main content container, replace body with just that content
+    if mainContent != nil && mainContent.Length() > 0 {
+        // Create a new body with only the main content
+        newBody := doc.Find("body").Empty()
+        newBody.AppendSelection(mainContent.Clone())
+        return
+    }
+    
+    // If no main content container found, use a density-based approach
+    // This keeps sections with high text-to-HTML ratio and removes others
+    c.cleanByContentDensity(doc)
+}
+
+// cleanByContentDensity removes elements with low text-to-HTML ratio
+func (c *Converter) cleanByContentDensity(doc *goquery.Document) {
+    // Elements that should be evaluated for content density
+    containers := doc.Find("div, section, article")
+    
+    containers.Each(func(i int, s *goquery.Selection) {
+        // Skip if already removed or tiny
+        if s.Length() == 0 || len(s.Text()) < 100 {
+            return
+        }
+        
+        html, _ := s.Html()
+        text := strings.TrimSpace(s.Text())
+        
+        // Calculate text-to-HTML ratio (higher is better)
+        textLength := len(text)
+        htmlLength := len(html)
+        
+        if htmlLength > 0 {
+            ratio := float64(textLength) / float64(htmlLength)
+            
+            // If ratio is too low (too much HTML, not enough text), 
+            // it's likely not main content
+            if ratio < 0.2 && len(s.Find("p, h1, h2, h3, h4, h5, h6").Text()) < 100 {
+                // But make sure we're not removing an important element
+                // that has too much formatting
+                imgCount := s.Find("img").Length()
+                linkCount := s.Find("a").Length()
+                pCount := s.Find("p").Length()
+                
+                // Consider images in your decision - use imgCount
+                if pCount < 3 && linkCount > pCount*2 && imgCount < 2 && len(text) < 500 {
+                    s.Remove()
+                }
+            }
+        }
+    })
+    
+    // Final pass: remove empty containers
+    doc.Find("div, section, article").Each(func(i int, s *goquery.Selection) {
+        if len(strings.TrimSpace(s.Text())) == 0 && s.Find("img").Length() == 0 {
+            s.Remove()
+        }
+    })
 }
 
 // Process an HTML element and convert it to Markdown

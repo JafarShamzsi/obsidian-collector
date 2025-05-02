@@ -18,3 +18,9 @@ content_selector: ""
 # Recursive scraping settings
 recursion_depth: 1   # How many levels of links to follow (0=none)
 max_pages: 10        # Maximum number of pages to scrape
+
+# Content cleaning settings
+remove_ads: true     # Remove advertising elements
+remove_navigation: true  # Remove navigation elements
+remove_footers: true     # Remove footer elements
+extract_main_content: true  # Try to extract only the main content

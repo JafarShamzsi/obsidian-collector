@@ -5,21 +5,20 @@ import (
     "fmt"
     "log"
     "net/url"
-    "os"
-    "strings"
+    "strings" // Add this import
     "time"
 
-    "obsidian-web-scraper/internal/config"
-    "obsidian-web-scraper/internal/links"
-    "obsidian-web-scraper/internal/markdown"
-    "obsidian-web-scraper/internal/scraper"
-    "obsidian-web-scraper/internal/storage"
+    "obsidian-collector/internal/config"
+    "obsidian-collector/internal/links"
+    "obsidian-collector/internal/markdown"
+    "obsidian-collector/internal/scraper"
+    "obsidian-collector/internal/storage"
 )
 
 func main() {
     // Define CLI flags
     configPath := flag.String("config", "", "Path to config file")
-    url := flag.String("url", "", "URL to scrape (overrides config file)")
+    urlFlag := flag.String("url", "", "URL to scrape (overrides config file)")
     outputDir := flag.String("output", "", "Output directory (overrides config file)")
     folder := flag.String("folder", "Web Clippings", "Obsidian folder to save in")
     selector := flag.String("selector", "", "CSS selector for content (overrides config file)")
@@ -35,8 +34,8 @@ func main() {
     }
     
     // Override config with command line arguments if provided
-    if *url != "" {
-        cfg.TargetURL = *url
+    if *urlFlag != "" {
+        cfg.TargetURL = *urlFlag
     }
     if *outputDir != "" {
         cfg.OutputDir = *outputDir
@@ -51,8 +50,12 @@ func main() {
     }
     
     // Create base URL for link resolution
-    baseURL := cfg.TargetURL
-    parsedURL, err := url.Parse(baseURL)
+    baseURL := cfg.TargetURL  // Make sure this is a string, not *string
+
+    // If cfg.TargetURL is somehow a *string, dereference it:
+    // baseURL := *cfg.TargetURL
+
+    parsedURL, err := url.Parse(baseURL) // Make sure baseURL is a string
     if err == nil {
         baseURL = parsedURL.Scheme + "://" + parsedURL.Host
     }
@@ -113,6 +116,14 @@ func main() {
 
 // scrapePage handles scraping a single page and saving it to a file
 func scrapePage(targetURL string, cfg *config.Config, fileManager *storage.FileManager, linkManager *links.LinkManager, folder string) (string, error) {
+    // Make sure URL has a scheme (http:// or https://)
+    if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+        targetURL = "https://" + targetURL
+        fmt.Printf("Added https:// prefix to URL: %s\n", targetURL)
+    }
+    
+    fmt.Printf("Attempting to fetch: %s\n", targetURL)
+    
     // Initialize scraper with rate-limiting settings
     s := scraper.NewScraper(targetURL)
     s.MinDelay = time.Duration(cfg.MinDelay) * time.Millisecond
@@ -125,33 +136,45 @@ func scrapePage(targetURL string, cfg *config.Config, fileManager *storage.FileM
         return "", fmt.Errorf("failed to fetch content: %v", err)
     }
     
+    fmt.Printf("Successfully fetched HTML from %s\n", targetURL)
+    
     // Parse the content
     content, err := scraper.Parse(doc, cfg.ContentSelector)
     if err != nil {
         return "", fmt.Errorf("failed to parse content: %v", err)
     }
     
+    if content.Title == "" {
+        content.Title = "Untitled Document"
+        fmt.Println("Warning: No title found, using 'Untitled Document'")
+    }
+    
+    fmt.Printf("Successfully parsed content: %d characters, title: %s\n", 
+               len(content.Content), content.Title)
+    
     // Create base URL from target URL (for resolving relative links)
     baseURL := targetURL
-    if i := strings.Index(baseURL, "://"); i > 0 {
-        hostEnd := strings.Index(baseURL[i+3:], "/")
-        if hostEnd > 0 {
-            baseURL = baseURL[:i+3+hostEnd]
-        }
+    parsedURL, err := url.Parse(baseURL)
+    if err == nil {
+        baseURL = parsedURL.Scheme + "://" + parsedURL.Host
     }
     
     // Convert to markdown
-    converter := markdown.NewConverter(baseURL, linkManager)
+    converter := markdown.NewConverter(baseURL, linkManager, cfg)
     md, err := converter.HTMLToMarkdown(content.Title, content.Content, content.Metadata)
     if err != nil {
         return "", fmt.Errorf("failed to convert content to markdown: %v", err)
     }
+    
+    fmt.Printf("Successfully converted to markdown: %d characters\n", len(md))
     
     // Save to file
     filePath, err := fileManager.SaveMarkdown(md, content.Title, folder)
     if err != nil {
         return "", fmt.Errorf("failed to save markdown file: %v", err)
     }
+    
+    fmt.Printf("File saved to: %s\n", filePath)
     
     // Register this page in the link manager
     linkManager.RegisterFile(targetURL, filePath)
