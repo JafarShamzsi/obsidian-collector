@@ -40,90 +40,101 @@ func NewConverter(baseURL string, linkManager *links.LinkManager, config *config
 	return c
 }
 
-// HTMLToMarkdown converts HTML content to Markdown format
+// Update HTMLToMarkdown to be less aggressive
 func (c *Converter) HTMLToMarkdown(title, html string, metadata map[string]string) (string, error) {
-	fmt.Println("Converting HTML content of length:", len(html))
+    fmt.Println("Converting HTML content of length:", len(html))
     
     // Load HTML into goquery
     doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-    if err != nil {
+    if (err != nil) {
         return "", fmt.Errorf("error parsing HTML: %w", err)
     }
 
-    // Check content size before cleaning
-    beforeCleaning := doc.Find("body").Text()
-    fmt.Printf("Content length before cleaning: %d characters\n", len(beforeCleaning))
-
-    // Clean the HTML
+    // Only do minimal cleaning - just remove scripts, etc.
     c.cleanHTML(doc)
-
-    // Check content size after cleaning
-    afterCleaning := doc.Find("body").Text()
-    fmt.Printf("Content length after cleaning: %d characters\n", len(afterCleaning))
     
-    // If we've lost too much content, use the original HTML
-    if float64(len(afterCleaning)) < float64(len(beforeCleaning))*0.1 && len(beforeCleaning) > 1000 {
-        fmt.Println("WARNING: Lost too much content during cleaning! Using original HTML.")
-        doc, _ = goquery.NewDocumentFromReader(strings.NewReader(html))
-        // Just remove scripts and styles, but keep everything else
-        doc.Find("script, style").Remove()
+    var sb strings.Builder
+    
+    // Create YAML frontmatter
+    sb.WriteString("---\n")
+    sb.WriteString(fmt.Sprintf("title: \"%s\"\n", escapeYAML(title)))
+    sb.WriteString(fmt.Sprintf("source: \"%s\"\n", c.BaseURL))
+    sb.WriteString(fmt.Sprintf("date_scraped: \"%s\"\n", time.Now().Format("2006-01-02")))
+
+    // Add any useful metadata
+    for key, value := range metadata {
+        switch key {
+        case "description", "author", "keywords", "og:description", "article:published_time", "article:modified_time": // Added trailing comma here
+            // Clean up the key name for OG metadata
+            cleanKey := strings.Replace(key, "og:", "", 1)
+            cleanKey = strings.Replace(cleanKey, "article:", "", 1)
+            sb.WriteString(fmt.Sprintf("%s: \"%s\"\n", cleanKey, escapeYAML(value)))
+        }
     }
+    sb.WriteString("---\n\n")
 
-	// Clean the HTML
-	c.cleanHTML(doc)
+    // Add title as H1
+    sb.WriteString("# " + title + "\n\n")
+    
+    // Process the HTML elements - first try to find marked main content
+    mainContent := doc.Find(".main-content-identified")
+    if mainContent.Length() > 0 && c.CleaningOptions.ExtractMainContent {
+        mainContent.Children().Each(func(i int, s *goquery.Selection) {
+            c.processElement(&sb, s, 0)
+        })
+    } else {
+        // If no main content identified or not using extraction, process the entire body
+        doc.Find("body").Children().Each(func(i int, s *goquery.Selection) {
+            c.processElement(&sb, s, 0)
+        })
+    }
+    
+    // Clean up the output
+    content := sb.String()
 
-	var sb strings.Builder
-
-	// Create YAML frontmatter
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("title: \"%s\"\n", escapeYAML(title)))
-	sb.WriteString(fmt.Sprintf("source: \"%s\"\n", c.BaseURL))
-	sb.WriteString(fmt.Sprintf("date_scraped: \"%s\"\n", time.Now().Format("2006-01-02")))
-
-	// Add any useful metadata
-	for key, value := range metadata {
-		switch key {
-		case "description", "author", "keywords", "og:description", "article:published_time", "article:modified_time":
-			// Clean up the key name for OG metadata
-			cleanKey := strings.Replace(key, "og:", "", 1)
-			cleanKey = strings.Replace(cleanKey, "article:", "", 1)
-			sb.WriteString(fmt.Sprintf("%s: \"%s\"\n", cleanKey, escapeYAML(value)))
-		}
-	}
-	sb.WriteString("---\n\n")
-
-	// Add title as H1
-	sb.WriteString("# " + title + "\n\n")
-
-	// Process the HTML elements
-	doc.Find("body").Children().Each(func(i int, s *goquery.Selection) {
-		c.processElement(&sb, s, 0)
-	})
-
-	// Clean up extra newlines
-	content := sb.String()
-	content = regexp.MustCompile(`\n{3,}`).ReplaceAllString(content, "\n\n")
-
-	// Clean up excessive whitespace
-	content = regexp.MustCompile(`[ \t]+\n`).ReplaceAllString(content, "\n")
-
-	// Clean up empty lines between heading and content
-	content = regexp.MustCompile(`(\n#+\s+.*\n)\n+`).ReplaceAllString(content, "$1\n")
-
-	// Remove lines with just whitespace or a few symbols
-	lines := strings.Split(content, "\n")
-	var cleanedLines []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Skip lines that are just whitespace or single symbols
-		if trimmed == "" || len(trimmed) < 3 {
-			continue
-		}
-		cleanedLines = append(cleanedLines, line)
-	}
-	content = strings.Join(cleanedLines, "\n")
-
-	return content, nil
+    // Remove lines with just whitespace or symbols commonly used for UI elements
+    lines := strings.Split(content, "\n")
+    var cleanedLines []string
+    
+    for _, line := range lines {
+        trimmed := strings.TrimSpace(line)
+        
+        // Skip empty lines
+        if trimmed == "" {
+            continue
+        }
+        
+        // Skip lines that are just UI elements like single symbols, dots, or dashes
+        if len(trimmed) <= 2 && strings.ContainsAny(trimmed, "|•·-—→") {
+            continue
+        }
+        
+        // Skip lines that are just button text
+        buttonPatterns := []string{
+            "Like", "Share", "Comment", "Follow", "Subscribe", 
+            "Search", "Login", "Sign", "Suggest", "Improve", // Added comma here
+        }
+        
+        skipLine := false
+        for _, pattern := range buttonPatterns {
+            if trimmed == pattern || strings.HasPrefix(trimmed, pattern+" ") || 
+               strings.HasSuffix(trimmed, " "+pattern) {
+                skipLine = true
+                break
+            }
+        }
+        
+        if !skipLine {
+            cleanedLines = append(cleanedLines, line)
+        }
+    }
+    
+    content = strings.Join(cleanedLines, "\n")
+    
+    // Clean up extra newlines without being too aggressive
+    content = regexp.MustCompile(`\n{4,}`).ReplaceAllString(content, "\n\n\n")
+    
+    return content, nil
 }
 
 // Update the cleanHTML function to be minimal - only remove definitive non-content elements
@@ -135,9 +146,9 @@ func (c *Converter) cleanHTML(doc *goquery.Document) {
     if c.CleaningOptions.RemoveAds {
         // These are very specific ad selectors that are almost certainly not content
         adSelectors := []string{
-            "div.ad", "div.ads", "div.advertisement", 
-            "[id^='div-gpt-ad']", ".adsbygoogle",
-            "aside.advertisement", "div.ad-container"
+			"div.ad", "div.ads", "div.advertisement", 
+			"[id^='div-gpt-ad']", ".adsbygoogle",
+			"aside.advertisement", "div.ad-container",
         }
         doc.Find(strings.Join(adSelectors, ", ")).Remove()
     }
@@ -432,7 +443,7 @@ func (c *Converter) processElement(sb *strings.Builder, s *goquery.Selection, de
 		src, exists := s.Attr("src")
 		if exists {
 			// Make relative URLs absolute
-			if !strings.HasPrefix(src, "http") {
+			if (!strings.HasPrefix(src, "http")) {
 				if strings.HasPrefix(src, "/") {
 					src = c.BaseURL + src
 				} else {
@@ -639,3 +650,4 @@ func escapeYAML(s string) string {
 	s = strings.Replace(s, "\"", "\\\"", -1)
 	return s
 }
+
